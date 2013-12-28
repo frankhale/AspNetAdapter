@@ -1,6 +1,17 @@
 #AspNetAdapter
 
 An adapter that abstracts away the complexity of the ASP.NET Request and Response objects.
+Applications using this library simply implement a simple interface to gain access to 
+the request and response dictionaries.
+
+```csharp
+public interface IAspNetAdapterApplication
+{
+	void Init(Dictionary<string, object> app,
+						Dictionary<string, object> request,
+						Action<Dictionary<string, object>> response);
+}
+```
 
 ###License
 

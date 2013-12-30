@@ -8,52 +8,8 @@
 //
 // Requirements: .NET 4.5
 //
-// Date: 28 December 2013
-//
-// Contact Info:
-//
-//  Frank Hale - <frankhale@gmail.com> 
-//
-// An attempt to abstract away some of the common bits of the ASP.NET HttpContext.
-//
-// I initially looked at OWIN to provide the abstraction that I wanted but I 
-// found it to be a bit more complex than I was hoping for. What I was looking
-// for was something a bit easier to strap in, something that exposed some 
-// simple types and was as braindead easy as I could come up with.
-//
-// Usage:
-// 
-//  Write a class that implements IAspNetAdapterApplication and add in the bits
-//  to set the ASP.NET Adapter handler and module in your web.config.
-//
-//	<system.web>
-//		<httpHandlers>
-//			<add verb="*" path="*" validate="false" type="AspNetAdapter.AspNetAdapterHandler"/>
-//		</httpHandlers>
-//		<httpModules>
-//			<add type="AspNetAdapter.AspNetAdapterModule" name="AspNetAdapterModule" />
-//		</httpModules>
-//	</system.web>
-//
-// The IAspNetAdapterApplication provides the following method:
-//
-//  void Init(Dictionary<string, object> app, 
-//            Dictionary<string, object> request, 
-//            Action<Dictionary<string, object>> response);
-//
-// The Init() method gets an app and request dictionary. The app dictionary 
-// contains callbacks for things like adding to the Session or getting something
-// from the Session. The request dictionary contains the information you'd 
-// expect from an http request and finally the response callback takes a 
-// dictionary with response values. All of the dictionary keys can be found in
-// the HttpAdapterConstants class.
-//
-
-#region LICENSE - GPL version 3 <http://www.gnu.org/licenses/gpl-3.0.html>
-//
-// GNU GPLv3 quick guide: http://www.gnu.org/licenses/quick-guide-gplv3.html
-//
-// GNU GPLv3 license <http://www.gnu.org/licenses/gpl-3.0.html>
+// Frank Hale - <frankhale@gmail.com> 
+// Date: 30 December 2013
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -68,12 +24,12 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
-#endregion
 
 using HtmlAgilityPack;
 using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
+using System.Configuration;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -168,6 +124,89 @@ namespace AspNetAdapter
 			httpContextAdapter.Init(HttpContext.Current);
 		}
 	}
+	#endregion
+
+	#region MIDDLEWARE
+	public class MiddlewareResult
+	{
+		public Dictionary<string, object> App { get; set; }
+		public Dictionary<string, object> Request { get; set; }
+		public Action<Dictionary<string, object>> Response { get; set; }
+	}
+
+	public interface IAspNetAdapterMiddleware
+	{
+		MiddlewareResult Transform(Dictionary<string, object> app,
+															 Dictionary<string, object> request);
+	}
+
+	#region WEB.CONFIG SECTION
+	// For reference: http://net.tutsplus.com/tutorials/asp-net/how-to-add-custom-configuration-settings-for-your-asp-net-application/
+	public class AspNetAdapterMiddlewareConfigurationElement : ConfigurationElement
+	{
+		[ConfigurationProperty("name", IsKey = true, IsRequired = true)]
+		public string Name
+		{
+			get
+			{
+				return this["name"] as string;
+			}
+		}
+
+		[ConfigurationProperty("type", IsRequired = true)]
+		public string Type
+		{
+			get
+			{
+				return this["type"] as string;
+			}
+		}
+	}
+
+	public class AspNetAdapterMiddlewareConfigurationCollection : ConfigurationElementCollection
+	{
+		public AspNetAdapterMiddlewareConfigurationElement this[int index]
+		{
+			get
+			{
+				return base.BaseGet(index) as AspNetAdapterMiddlewareConfigurationElement;
+			}
+
+			set
+			{
+				if (base.BaseGet(index) != null)
+				{
+					base.BaseRemoveAt(index);
+				}
+
+				this.BaseAdd(index, value);
+			}
+		}
+
+		protected override ConfigurationElement CreateNewElement()
+		{
+			return new AspNetAdapterMiddlewareConfigurationElement();
+		}
+
+		protected override object GetElementKey(ConfigurationElement element)
+		{
+			return ((AspNetAdapterMiddlewareConfigurationElement)element).Type;
+		}
+	}
+
+	public class AspNetAdapterWebConfig : ConfigurationSection
+	{
+		[ConfigurationProperty("middleware")]
+		public AspNetAdapterMiddlewareConfigurationCollection AspNetAdapterMiddlewareCollection
+		{
+			get
+			{
+				return this["middleware"] as AspNetAdapterMiddlewareConfigurationCollection;
+			}
+		}
+	}
+	#endregion
+
 	#endregion
 
 	#region ASP.NET ADAPTER
@@ -291,6 +330,8 @@ namespace AspNetAdapter
 
 	public sealed class HttpContextAdapter
 	{
+		private static AspNetAdapterWebConfig WebConfig = ConfigurationManager.GetSection("AspNetAdapter") as AspNetAdapterWebConfig;
+
 		private static object syncInitLock = new object();
 
 		private Stopwatch timer;
@@ -351,12 +392,32 @@ namespace AspNetAdapter
 			Dictionary<string, object> app = InitializeApplicationDictionary();
 			Dictionary<string, object> request = InitializeRequestDictionary();
 
+			#region PROCESS MIDDLEWARE
+			foreach (AspNetAdapterMiddlewareConfigurationElement mw in WebConfig.AspNetAdapterMiddlewareCollection)
+			{
+				try
+				{
+					// Look up the type and get a reference to it
+					// make sure it implements the IAspNetAdapterMiddleware interface
+					// instantiate the type by name
+					// call the transform method
+					// set 'app', 'request' to the values returned from the transform method
+				}
+				catch
+				{
+					throw;
+				}
+			}
+			#endregion
+
+			#region Initialize the App
 			IAspNetAdapterApplication _appInstance = (IAspNetAdapterApplication)Activator.CreateInstance(adapterApp);
 
 			if (firstRun)
 				lock (syncInitLock) _appInstance.Init(app, request, ResponseCallback);
 			else
 				_appInstance.Init(app, request, ResponseCallback);
+			#endregion
 		}
 
 		#region REQUEST/APPLICATION DICTIONARY INITIALIZATION

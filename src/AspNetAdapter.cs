@@ -71,7 +71,7 @@ namespace AspNetAdapter
 		public IAsyncResult BeginProcessRequest(HttpContext context, AsyncCallback cb, object extraData)
 		{
 			var frameworkCompletionSource = new TaskCompletionSource<bool>();
-			var httpContextAdapter = new HttpContextAdapter();
+			var httpContextAdapter = new HttpContextAdapter(context);
 
 			httpContextAdapter.OnComplete += (o, e) =>
 			{
@@ -91,14 +91,12 @@ namespace AspNetAdapter
 				frameworkCompletionSource.SetResult(true);
 			};
 
-			httpContextAdapter.Init(context);
+			httpContextAdapter.Init();
 
 			var frameworkTask = frameworkCompletionSource.Task;
 
 			if (cb != null)
-			{
 				frameworkTask.ContinueWith(x => cb(x), TaskContinuationOptions.ExecuteSynchronously);
-			}
 
 			return frameworkTask;
 		}
@@ -124,7 +122,7 @@ namespace AspNetAdapter
 
 		private void app_Error(object sender, EventArgs eventArgs)
 		{
-			var httpContextAdapter = new HttpContextAdapter();
+			var httpContextAdapter = new HttpContextAdapter(HttpContext.Current);
 
 			httpContextAdapter.OnComplete += (o, e) =>
 			{
@@ -142,7 +140,7 @@ namespace AspNetAdapter
 				}
 			};
 
-			httpContextAdapter.Init(HttpContext.Current);
+			httpContextAdapter.Init();
 		}
 	}
 	#endregion
@@ -352,29 +350,31 @@ namespace AspNetAdapter
 	public sealed class HttpContextAdapter
 	{
 		private static AspNetAdapterWebConfig webConfig = ConfigurationManager.GetSection("aspNetAdapter") as AspNetAdapterWebConfig;
-
 		private static object syncInitLock = new object();
-
-		private Stopwatch timer;
-		private HttpContext context;
-		private bool firstRun, debugMode;
 		private static string AspNetApplicationTypeSessionName = "__AspNetApplicationType";
 		private static string AspNetMiddlewareSessionName = "__AspNetMiddleware";
 
+		private IEnumerable<Type> apps;
+		private Type adapterApp;
+		private Stopwatch timer;
+		private HttpContext context;
+		private bool firstRun, debugMode;
 		public event EventHandler<ResponseEventArgs> OnComplete;
 
-		public HttpContextAdapter() { }
+		public HttpContextAdapter(HttpContext ctx)
+		{
+			context = ctx;
+			apps = Utility.GetAssemblies(x => x.GetName().Name != "DotNetOpenAuth")
+										.SelectMany(x => x.GetTypes()
+														.Where(y => y.GetInterfaces().FirstOrDefault(i => i.IsInterface && i.UnderlyingSystemType == typeof(IAspNetAdapterApplication)) != null));
+		}
 
-		public void Init(HttpContext ctx)
+		public void Init()
 		{
 			timer = new Stopwatch();
 			timer.Start();
 
-			context = ctx;
-
 			firstRun = Convert.ToBoolean(context.Application["__SyncInitLock"]);
-
-			Type adapterApp = null;
 
 			if (context.Application[AspNetApplicationTypeSessionName] == null)
 			{
@@ -382,11 +382,6 @@ namespace AspNetAdapter
 
 				try
 				{
-					// Look for a class inside the executing assembly that implements IAspNetAdapterApplication
-					var apps = Utility.GetAssemblies(x => x.GetName().Name != "DotNetOpenAuth")
-										.SelectMany(x => x.GetTypes()
-														.Where(y => y.GetInterfaces().FirstOrDefault(i => i.IsInterface && i.UnderlyingSystemType == typeof(IAspNetAdapterApplication)) != null));
-
 					if (apps != null)
 					{
 						if (apps.Count() > 1)
@@ -407,26 +402,33 @@ namespace AspNetAdapter
 				}
 			}
 			else
-				adapterApp = ctx.Application[AspNetApplicationTypeSessionName] as Type;
+				adapterApp = context.Application[AspNetApplicationTypeSessionName] as Type;
 
 			debugMode = IsAssemblyDebugBuild(adapterApp.Assembly);
 
 			Dictionary<string, object> app = InitializeApplicationDictionary();
 			Dictionary<string, object> request = InitializeRequestDictionary();
 
-			#region PROCESS MIDDLEWARE
+			ProcessMiddleware(app, request);
+			InitializeApplication(app, request);
+		}
+
+		private void ProcessMiddleware(Dictionary<string, object> app, Dictionary<string, object> request)
+		{
+			// Middleware in the context of AspNetAdapter is simply a class implementing the IAspNetMiddleware interface that
+			// has the ability to modify the 'app' and/or 'request' dictionaries. 
 			if (webConfig != null)
 			{
 				IEnumerable<Type> middleware = null;
 
-				if (ctx.Application[AspNetMiddlewareSessionName] == null)
+				if (context.Application[AspNetMiddlewareSessionName] == null)
 				{
 					middleware = Utility.GetAssemblies()
 															.SelectMany(x => x.GetTypes().Where(y => y.GetInterfaces()
 																																				.FirstOrDefault(i => i.IsInterface && i.UnderlyingSystemType == typeof(IAspNetAdapterMiddleware)) != null));
 				}
 				else
-					middleware = ctx.Application[AspNetMiddlewareSessionName] as IEnumerable<Type>;
+					middleware = context.Application[AspNetMiddlewareSessionName] as IEnumerable<Type>;
 
 				if (middleware != null)
 				{
@@ -436,6 +438,7 @@ namespace AspNetAdapter
 
 						if (m != null)
 						{
+							// The big question is, should this instance be cached?
 							var min = (IAspNetAdapterMiddleware)Activator.CreateInstance(m);
 							var result = min.Transform(app, request);
 
@@ -448,16 +451,16 @@ namespace AspNetAdapter
 					}
 				}
 			}
-			#endregion
+		}
 
-			#region Initialize the App
+		private void InitializeApplication(Dictionary<string, object> app, Dictionary<string, object> request)
+		{
 			IAspNetAdapterApplication _appInstance = (IAspNetAdapterApplication)Activator.CreateInstance(adapterApp);
 
 			if (firstRun)
 				lock (syncInitLock) _appInstance.Init(app, request, ResponseCallback);
 			else
 				_appInstance.Init(app, request, ResponseCallback);
-			#endregion
 		}
 
 		#region REQUEST/APPLICATION DICTIONARY INITIALIZATION
@@ -530,7 +533,6 @@ namespace AspNetAdapter
 		}
 		#endregion
 
-		#region MISCELLANEOUS
 		private string[] SplitPathSegments(string path)
 		{
 			string _path = (string.IsNullOrEmpty(path)) ? "/" : path;
@@ -606,8 +608,7 @@ namespace AspNetAdapter
 			return (postedFiles.Count > 0) ? postedFiles : null;
 		}
 
-		// It's likely I grabbed this from Stackoverflow but I cannot remember the
-		// exact source.
+		// It's likely I grabbed this from Stackoverflow but I cannot remember the exact source.
 		public byte[] ReadStream(Stream stream)
 		{
 			int length = (int)stream.Length;
@@ -619,7 +620,6 @@ namespace AspNetAdapter
 
 			return buffer;
 		}
-		#endregion
 
 		public void SendResponse(Dictionary<string, object> response)
 		{

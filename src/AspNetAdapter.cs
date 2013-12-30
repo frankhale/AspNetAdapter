@@ -8,6 +8,27 @@
 //
 // Requirements: .NET 4.5
 //
+// Web.Config:
+//
+// <configSections>
+//	<section name="aspNetAdapter" type="AspNetAdapter.AspNetAdapterWebConfig" />
+// </configSections>
+//
+// <aspNetAdapter>
+//	<middleware>
+//		<add name="foo" type="bar.foo" />
+//	</middleware>
+// </aspNetAdapter>
+//
+// <system.webServer>
+//	<handlers>
+//		<add name="AspNetAdapterHandler" path="*" verb="*" type="AspNetAdapter.AspNetAdapterHandler" />
+//	</handlers>
+//	<modules>
+//		<add name="AspNetAdapterModule" type="AspNetAdapter.AspNetAdapterModule" />
+//	</modules>
+// </system.webServer>
+//
 // Frank Hale - <frankhale@gmail.com> 
 // Date: 30 December 2013
 //
@@ -131,7 +152,6 @@ namespace AspNetAdapter
 	{
 		public Dictionary<string, object> App { get; set; }
 		public Dictionary<string, object> Request { get; set; }
-		public Action<Dictionary<string, object>> Response { get; set; }
 	}
 
 	public interface IAspNetAdapterMiddleware
@@ -196,7 +216,7 @@ namespace AspNetAdapter
 
 	public class AspNetAdapterWebConfig : ConfigurationSection
 	{
-		[ConfigurationProperty("middleware")]
+		[ConfigurationProperty("middleware", IsRequired = false)]
 		public AspNetAdapterMiddlewareConfigurationCollection AspNetAdapterMiddlewareCollection
 		{
 			get
@@ -227,6 +247,7 @@ namespace AspNetAdapter
 		public static readonly string User = "User";
 		public static readonly string SessionID = "SessionID";
 		public static readonly string DebugMode = "DebugMode";
+		public static readonly string Middleware = "Middleware";
 		#endregion
 
 		#region APPLICATION CALLBACKS
@@ -330,7 +351,7 @@ namespace AspNetAdapter
 
 	public sealed class HttpContextAdapter
 	{
-		private static AspNetAdapterWebConfig WebConfig = ConfigurationManager.GetSection("AspNetAdapter") as AspNetAdapterWebConfig;
+		private static AspNetAdapterWebConfig webConfig = ConfigurationManager.GetSection("aspNetAdapter") as AspNetAdapterWebConfig;
 
 		private static object syncInitLock = new object();
 
@@ -338,6 +359,7 @@ namespace AspNetAdapter
 		private HttpContext context;
 		private bool firstRun, debugMode;
 		private static string AspNetApplicationTypeSessionName = "__AspNetApplicationType";
+		private static string AspNetMiddlewareSessionName = "__AspNetMiddleware";
 
 		public event EventHandler<ResponseEventArgs> OnComplete;
 
@@ -393,19 +415,37 @@ namespace AspNetAdapter
 			Dictionary<string, object> request = InitializeRequestDictionary();
 
 			#region PROCESS MIDDLEWARE
-			foreach (AspNetAdapterMiddlewareConfigurationElement mw in WebConfig.AspNetAdapterMiddlewareCollection)
+			if (webConfig != null)
 			{
-				try
+				IEnumerable<Type> middleware = null;
+
+				if (ctx.Application[AspNetMiddlewareSessionName] == null)
 				{
-					// Look up the type and get a reference to it
-					// make sure it implements the IAspNetAdapterMiddleware interface
-					// instantiate the type by name
-					// call the transform method
-					// set 'app', 'request' to the values returned from the transform method
+					middleware = Utility.GetAssemblies()
+															.SelectMany(x => x.GetTypes().Where(y => y.GetInterfaces()
+																																				.FirstOrDefault(i => i.IsInterface && i.UnderlyingSystemType == typeof(IAspNetAdapterMiddleware)) != null));
 				}
-				catch
+				else
+					middleware = ctx.Application[AspNetMiddlewareSessionName] as IEnumerable<Type>;
+
+				if (middleware != null)
 				{
-					throw;
+					foreach (AspNetAdapterMiddlewareConfigurationElement mw in webConfig.AspNetAdapterMiddlewareCollection)
+					{
+						var m = middleware.FirstOrDefault(x => x.FullName == mw.Type);
+
+						if (m != null)
+						{
+							var min = (IAspNetAdapterMiddleware)Activator.CreateInstance(m);
+							var result = min.Transform(app, request);
+
+							if (result != null)
+							{
+								app = result.App;
+								request = result.Request;
+							}
+						}
+					}
 				}
 			}
 			#endregion
@@ -484,6 +524,7 @@ namespace AspNetAdapter
 			application[HttpAdapterConstants.ResponseRedirectCallback] = new Action<string, Dictionary<string, string>>(ResponseRedirectCallback);
 			application[HttpAdapterConstants.ServerError] = serverError;
 			application[HttpAdapterConstants.ServerErrorStackTrace] = (serverError != null) ? serverError.GetStackTrace() : null;
+			application[HttpAdapterConstants.Middleware] = new Dictionary<string, object>();
 
 			return application;
 		}

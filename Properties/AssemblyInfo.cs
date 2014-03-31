@@ -10,7 +10,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("Frank Hale")]
 [assembly: AssemblyProduct("AspNetAdapter")]
-[assembly: AssemblyCopyright("Copyright © 2013 | LICENSE GNU GPLv3")]
+[assembly: AssemblyCopyright("Copyright © 2014 | LICENSE GNU GPLv3")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 

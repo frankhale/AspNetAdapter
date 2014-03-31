@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<package >
+	<metadata>
+		<id>AspNetAdapter</id>
+		<version>0.0.25</version>
+		<title>ASP.NET Adapter</title>
+		<authors>Frank Hale</authors>
+		<owners>Frank Hale</owners>
+		<licenseUrl>http://www.gnu.org/licenses/gpl-3.0.html</licenseUrl>
+		<projectUrl>https://github.com/frankhale/AspNetAdapter</projectUrl>
+		<iconUrl>https://github.com/frankhale/aurora/blob/master/aurora.png</iconUrl>
+		<requireLicenseAcceptance>false</requireLicenseAcceptance>
+		<description>An ASP.NET HttpContext Abstraction Layer</description>
+		<summary>Abstracts away the complexity of ASP.NET HttpContext and presents simple dictionaries for the request and response objects</summary>
+		<releaseNotes>Initial Nuget Packaging</releaseNotes>
+		<copyright>Copyright 2014</copyright>
+		<tags>ASP.NET HttpContext</tags>
+		<dependencies>
+			<dependency id="HtmlAgilityPack" version="1.4.6" />
+		</dependencies>
+		</metadata>
+	<files>
+		<file src="README.md" target="README.md" />
+	</files>
+</package>

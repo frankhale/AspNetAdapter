@@ -2,7 +2,7 @@
 <package >
 	<metadata>
 		<id>AspNetAdapter</id>
-		<version>0.0.25</version>
+		<version>0.0.26</version>
 		<title>ASP.NET Adapter</title>
 		<authors>Frank Hale</authors>
 		<owners>Frank Hale</owners>

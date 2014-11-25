@@ -1,5 +1,7 @@
 ﻿//
-// AspNetAdapter 
+// AspNetAdapter - A thin wrapper around the ASP.NET request and response objects.
+//
+// Updated On: 23 November 2014
 //
 // Description: 
 //
@@ -7,8 +9,6 @@
 //	to disconnect applications from the intrinsics of the HttpContext.
 //
 // Requirements: .NET 4.5
-//
-// Date: 4 April 2014
 //
 // Contact Info:
 //
@@ -59,10 +59,10 @@
 //		</middleware>
 //	</aspNetAdapter>
 //
-
-#region LICENSE - GPL version 3 <http://www.gnu.org/licenses/gpl-3.0.html>
+// Additionally to the middleware you can specify the application that implements
+// the IAspNetAdapterApplication interface:
 //
-// GNU GPLv3 quick guide: http://www.gnu.org/licenses/quick-guide-gplv3.html
+//	<application name="Engine" type="Aurora.Engine" /> 
 //
 // GNU GPLv3 license <http://www.gnu.org/licenses/gpl-3.0.html>
 //
@@ -79,7 +79,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
-#endregion
 
 using HtmlAgilityPack;
 using System;
@@ -218,6 +217,27 @@ namespace AspNetAdapter
 		}
 	}
 
+	public class AspNetAdapterApplicationConfigurationElement : ConfigurationElement
+	{
+		[ConfigurationProperty("name", IsKey = true, IsRequired = true)]
+		public string Name
+		{
+			get
+			{
+				return this["name"] as string;
+			}
+		}
+
+		[ConfigurationProperty("type", IsRequired = true)]
+		public string Type
+		{
+			get
+			{
+				return this["type"] as string;
+			}
+		}
+	}
+
 	public class AspNetAdapterMiddlewareConfigurationCollection : ConfigurationElementCollection
 	{
 		public AspNetAdapterMiddlewareConfigurationElement this[int index]
@@ -259,6 +279,15 @@ namespace AspNetAdapter
 				return this["middleware"] as AspNetAdapterMiddlewareConfigurationCollection;
 			}
 		}
+
+		[ConfigurationProperty("application", IsRequired = false)]
+		public AspNetAdapterApplicationConfigurationElement AspNetAdapterApplication
+		{
+			get
+			{
+				return this["application"] as AspNetAdapterApplicationConfigurationElement;
+			}
+		}
 	}
 	#endregion
 
@@ -289,7 +318,8 @@ namespace AspNetAdapter
 		public static readonly string RewritePathCallback = "RewritePathCallback";
 		public static readonly string User = "User";
 		public static readonly string SessionId = "SessionID";
-		public static readonly string DebugMode = "DebugMode";
+		public static readonly string DebugModeAssembly = "DebugModeAssembly";
+		public static readonly string DebugModeASPNET = "DebugModeASPNET";
 		#endregion
 
 		#region APPLICATION CALLBACKS
@@ -389,7 +419,7 @@ namespace AspNetAdapter
 		private static readonly AspNetAdapterWebConfig _webConfig = ConfigurationManager.GetSection("aspNetAdapter") as AspNetAdapterWebConfig;
 		private Stopwatch _timer;
 		private HttpContext _context;
-		private bool _firstRun, _debugMode;
+		private bool _firstRun, _debugModeAssembly;
 		private const string AspNetApplicationTypeSessionName = "__AspNetApplicationType";
 		private const string AspNetMiddlewareSessionName = "__AspNetMiddleware";
 
@@ -400,7 +430,6 @@ namespace AspNetAdapter
 			_context = ctx;
 			_timer = new Stopwatch();
 			_timer.Start();
-			_context = ctx;
 			_firstRun = Convert.ToBoolean(_context.Application["__SyncInitLock"]);
 
 			Type adapterApp = null;
@@ -409,16 +438,31 @@ namespace AspNetAdapter
 			{
 				_context.Application["__SyncInitLock"] = true;
 
-				// Look for a class inside the executing assembly that implements IAspNetAdapterApplication
-				var app = Utility.GetAssemblies(x => x.GetName().Name != "DotNetOpenAuth")
-									.SelectMany(x => x.GetTypes()
-													.Where(y => y.GetInterfaces().FirstOrDefault(i => i.IsInterface && i.UnderlyingSystemType == typeof(IAspNetAdapterApplication)) != null))
-													.FirstOrDefault();
+				List<Type> apps = null;
 
-				if (app == null)
-					throw new Exception("Failed to find an assembly the IAspNetAdapterApplication interface");
+				if (_webConfig.AspNetAdapterApplication == null)
+				{
+					apps = Utility.GetAssemblies()
+												.SelectMany(x => x.GetLoadableTypes()
+												.Where(y => y.GetInterfaces().FirstOrDefault(i => i.IsInterface && i.UnderlyingSystemType == typeof(IAspNetAdapterApplication)) != null))
+												.ToList();
+				}
+				else
+				{
+					apps = Utility.GetAssemblies()
+												.SelectMany(x => x.GetLoadableTypes())
+												.Where(y => y.Name == _webConfig.AspNetAdapterApplication.Name &&
+																		y.FullName == _webConfig.AspNetAdapterApplication.Type &&
+																		y.GetInterfaces().FirstOrDefault(i => i.IsInterface && i.UnderlyingSystemType == typeof(IAspNetAdapterApplication)) != null)
+												.ToList();
+				}
+				
+				if (apps == null)
+					throw new Exception("Failed to find an assembly the IAspNetAdapterApplication interface.");
+				else if(apps.Count() > 1)
+					throw new Exception("You can only have one IAspNetAdapterApplication interface.");
 
-				adapterApp = app;
+				adapterApp = apps.FirstOrDefault();
 
 				_context.Application.Lock();
 				_context.Application[AspNetApplicationTypeSessionName] = adapterApp;
@@ -430,7 +474,7 @@ namespace AspNetAdapter
 
 			if (adapterApp == null) return;
 
-			_debugMode = IsAssemblyDebugBuild(adapterApp.Assembly);
+			_debugModeAssembly = IsAssemblyDebugBuild(adapterApp.Assembly);
 
 			var appDictionary = InitializeApplicationDictionary();
 			var requestDictionary = InitializeRequestDictionary();
@@ -451,7 +495,7 @@ namespace AspNetAdapter
 			if (_context.Application[AspNetMiddlewareSessionName] == null)
 			{
 				var middleware = Utility.GetAssemblies()
-					.SelectMany(x => x.GetTypes().Where(y => y.GetInterfaces()
+					.SelectMany(x => x.GetLoadableTypes().Where(y => y.GetInterfaces()
 						.FirstOrDefault(i => i.IsInterface &&
 																 i.UnderlyingSystemType == typeof(IAspNetAdapterMiddleware)) != null));
 
@@ -519,8 +563,7 @@ namespace AspNetAdapter
 
 			try
 			{
-				request[HttpAdapterConstants.RequestBody] = StringToDictionary(new StreamReader(_context.Request.InputStream).ReadToEnd(), '&', '=');
-				//request[HttpAdapterConstants.RequestBody] = (_context.Request.InputStream != null) ? StringToDictionary(new StreamReader(_context.Request.InputStream).ReadToEnd(), '&', '=') : null;
+				request[HttpAdapterConstants.RequestBody] = StringToDictionary(new StreamReader(_context.Request.InputStream).ReadToEnd(), '&', '=');				
 			}
 			catch
 			{
@@ -547,7 +590,11 @@ namespace AspNetAdapter
 			if (serverError != null)
 				_context.Server.ClearError();
 
-			application[HttpAdapterConstants.DebugMode] = _debugMode;
+			// This debug mode tells us if the assembly is in debug mode, not if the web.config is.
+			// TODO: We may want to be able to tell if the web.config is in debug mode as well if
+			//       the assembly is.
+			application[HttpAdapterConstants.DebugModeAssembly] = _debugModeAssembly;
+			application[HttpAdapterConstants.DebugModeASPNET] = _context.IsDebuggingEnabled;
 			application[HttpAdapterConstants.User] = _context.User;
 			application[HttpAdapterConstants.ApplicationSessionStoreAddCallback] = new Action<string, object>(ApplicationSessionStoreAddCallback);
 			application[HttpAdapterConstants.ApplicationSessionStoreRemoveCallback] = new Action<string>(ApplicationSessionStoreRemoveCallback);
@@ -597,7 +644,7 @@ namespace AspNetAdapter
 			if (assembly == null) throw new ArgumentNullException("assembly");
 
 			var debuggableAttribute = assembly.GetCustomAttributes(typeof(DebuggableAttribute), false)
-																				 .FirstOrDefault() as DebuggableAttribute;
+																				.FirstOrDefault() as DebuggableAttribute;
 
 			return debuggableAttribute != null && debuggableAttribute.IsJITTrackingEnabled;
 		}
@@ -618,7 +665,9 @@ namespace AspNetAdapter
 
 			if (string.IsNullOrEmpty(value)) return result;
 
-			foreach (var arr in value.Split(new char[] { splitOn }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Split(delimiter)).Where(arr => !result.ContainsKey(arr[0])))
+			foreach (var arr in value.Split(new char[] { splitOn }, StringSplitOptions.RemoveEmptyEntries)
+															 .Select(x => x.Split(delimiter))
+															 .Where(arr => !result.ContainsKey(arr[0])))
 				result.Add(arr[0].Trim(), arr[1].Trim());
 
 			return result;
@@ -635,13 +684,14 @@ namespace AspNetAdapter
 
 		private List<PostedFile> GetRequestFiles()
 		{
-			var postedFiles = (from HttpPostedFileBase pf in _context.Request.Files
-												 select new PostedFile()
-												 {
-													 ContentType = pf.ContentType,
-													 FileName = pf.FileName,
-													 FileBytes = ReadStream(pf.InputStream)
-												 }).ToList();
+			var postedFiles = _context.Request.Files.Cast<HttpPostedFileBase>()
+																.Select(x => new PostedFile
+																{
+																	ContentType = x.ContentType,
+																	FileName = x.FileName,
+																	FileBytes = ReadStream(x.InputStream)
+																})
+																.ToList();
 
 			return (postedFiles.Count > 0) ? postedFiles : null;
 		}
@@ -951,13 +1001,25 @@ namespace AspNetAdapter
 	{
 		public static IEnumerable<Assembly> GetAssemblies(Predicate<Assembly> predicate = null)
 		{
-			//NOTE: DotNetOpenAuth depends on System.Web.Mvc 1.0 if you don't have MVC 1.0
-			//      this is gonna barf and throw an exception...
-
 			return AppDomain.CurrentDomain
 							.GetAssemblies()
 							.AsParallel()
 							.Where(x => (predicate == null) || predicate(x));
+		}
+
+		// Thanks to: http://stackoverflow.com/a/11915414/170217
+		public static IEnumerable<Type> GetLoadableTypes(this Assembly assembly)
+		{
+			assembly.ThrowIfArgumentNull("assembly");
+
+			try
+			{
+				return assembly.GetTypes();
+			}
+			catch (ReflectionTypeLoadException e)
+			{
+				return e.Types.Where(t => t != null);
+			}
 		}
 	}
 }

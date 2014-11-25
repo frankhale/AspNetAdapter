@@ -1,9 +1,10 @@
 #AspNetAdapter
 
-An adapter that abstracts away the complexity of the ASP.NET Request and Response objects.
+An adapter that abstracts away the complexity of the ASP.NET Request and 
+Response objects.
 
-This is currently undergoing a rebirthing process to add middleware capability and to tune
-what is already present.
+This is currently undergoing a rebirthing process to add middleware capability 
+and to tune what is already present.
 
 Usage information will be provided at a later date.
 
@@ -25,5 +26,5 @@ GNU GPL version 3 <http://www.gnu.org/licenses/gpl-3.0.html>
 // this program.  If not, see <http://www.gnu.org/licenses/>.
 ```
 
-Frank Hale <frank.hale@gmail.com>
-2012-2014
+Frank Hale &lt;frank.hale@gmail.com&gt;  
+24 November 2014
